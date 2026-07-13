@@ -31,6 +31,9 @@ type Job struct {
 	ContactEmail       string `json:"contact_email"`
 	ContactType        string `json:"contact_type"`
 	CareersURL         string `json:"careers_url"`
+	HasResearch        bool   `json:"has_research"` // a welcome package exists — fetch it from /api/jobs/{id}/research
+	IsIntermediary     bool   `json:"is_intermediary"`
+	ActualEmployer     string `json:"actual_employer"`
 	Industry           string `json:"industry"`
 	Location           string `json:"location"`
 	WorkplaceType      string `json:"workplace_type"`
@@ -112,6 +115,13 @@ func NewStore() (*Store, error) {
 	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN contact_email TEXT DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN contact_type TEXT DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN careers_url TEXT DEFAULT ''`)
+	// Lazy migration: the welcome-package briefing. research_json holds the full
+	// report (rendered in a modal); is_intermediary flags a staffing agency or
+	// middleman reposting someone else's role, which the table badges so a
+	// high score on a reposted listing isn't mistaken for a direct employer.
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN research_json TEXT DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN is_intermediary INTEGER DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN actual_employer TEXT DEFAULT ''`)
 	_, _ = db.Exec(`UPDATE jobs SET source = 'linkedin' WHERE source IS NULL OR source = ''`)
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source)`)
 	return &Store{db: db, dbPath: dbPath}, nil
@@ -164,7 +174,8 @@ func (s *Store) ListJobs(f ListFilter) ([]Job, error) {
 		description_summary, category, resume_match, application_status, resume_variant,
 		drive_folder_url, notes, first_seen_at, last_seen_at, applied_at, week_tag,
 		COALESCE(flagged, 0), COALESCE(source, 'linkedin'),
-		COALESCE(contact_email, ''), COALESCE(contact_type, ''), COALESCE(careers_url, '')
+		COALESCE(contact_email, ''), COALESCE(contact_type, ''), COALESCE(careers_url, ''),
+		COALESCE(research_json, '') != '', COALESCE(is_intermediary, 0), COALESCE(actual_employer, '')
 		FROM jobs WHERE 1=1`
 	var args []any
 	if f.Status != "" && f.Status != "all" {
@@ -222,6 +233,8 @@ func (s *Store) ListJobs(f ListFilter) ([]Job, error) {
 			flagged                               int
 			source                                string
 			contactEmail, contactType, careersURL string
+			hasResearch, isIntermediary           int
+			actualEmployer                        string
 		)
 		if err := rows.Scan(
 			&j.JobID, &j.Title, &stdTitle, &j.Company, &cURL, &cWeb, &cDesc, &cEmp, &cHQ,
@@ -229,12 +242,16 @@ func (s *Store) ListJobs(f ListFilter) ([]Job, error) {
 			&easy, &posted, &applyU, &jobU, &desc, &cat, &j.ResumeMatch, &j.ApplicationStatus,
 			&variant, &drive, &notes, &firstSeen, &lastSeen, &appliedAt, &weekTag, &flagged, &source,
 			&contactEmail, &contactType, &careersURL,
+			&hasResearch, &isIntermediary, &actualEmployer,
 		); err != nil {
 			return nil, err
 		}
 		j.ContactEmail = contactEmail
 		j.ContactType = contactType
 		j.CareersURL = careersURL
+		j.HasResearch = hasResearch == 1
+		j.IsIntermediary = isIntermediary == 1
+		j.ActualEmployer = actualEmployer
 		j.Source = source
 		j.Flagged = flagged == 1
 		j.StandardizedTitle = stdTitle.String
@@ -462,6 +479,18 @@ func (s *Store) SetFlag(jobID string, flagged bool) error {
 		return fmt.Errorf("job %q not found", jobID)
 	}
 	return nil
+}
+
+// Research returns the raw welcome-package JSON for one job, or "" if the job
+// has not been researched. Served on its own endpoint rather than inlined in
+// the list, since each report is a few KB and only one is viewed at a time.
+func (s *Store) Research(jobID string) (string, error) {
+	var raw string
+	err := s.db.QueryRow(`SELECT COALESCE(research_json, '') FROM jobs WHERE job_id = ?`, jobID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("job %q not found", jobID)
+	}
+	return raw, err
 }
 
 // CompanyNeedingContact is one company awaiting a recruiting-contact lookup.

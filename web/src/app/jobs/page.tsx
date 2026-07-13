@@ -18,6 +18,9 @@ interface Job {
   contact_email: string;
   contact_type: string;
   careers_url: string;
+  has_research: boolean;
+  is_intermediary: boolean;
+  actual_employer: string;
   industry: string;
   location: string;
   workplace_type: string;
@@ -389,6 +392,7 @@ export default function JobsPage() {
   const [search, setSearch] = useState("");
   const [minScore, setMinScore] = useState(0);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [packageFor, setPackageFor] = useState<Job | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("score");
@@ -756,6 +760,9 @@ export default function JobsPage() {
           onImported={() => { fetchJobs(); fetchStats(); }}
         />
       )}
+      {packageFor && (
+        <WelcomePackageModal job={packageFor} onClose={() => setPackageFor(null)} />
+      )}
       {/* header */}
       <header className="sticky top-0 z-20 border-b border-white/[0.04] bg-[var(--background)]/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1600px] items-center justify-between px-8 py-5">
@@ -1072,9 +1079,30 @@ export default function JobsPage() {
                         </td>
                         <td className="px-4 py-4 align-top min-w-[180px]">
                           <div className="text-zinc-200 leading-[1.35]">{j.company}</div>
+                          {j.is_intermediary && (
+                            <div
+                              className="mt-1 inline-flex items-center gap-1 rounded border border-amber-700/60 bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-400"
+                              title={
+                                j.actual_employer
+                                  ? `Staffing/recruiting agency reposting a role for ${j.actual_employer} — not the employer.`
+                                  : "Staffing/recruiting agency reposting someone else's role — not the employer."
+                              }
+                            >
+                              ⚠ agency
+                              {j.actual_employer ? <span className="text-amber-500/80">→ {j.actual_employer}</span> : null}
+                            </div>
+                          )}
                           <div className="mt-1 text-[11px] leading-tight text-zinc-500 truncate max-w-[220px]">
                             {[j.company_employees, j.industry].filter(Boolean).join(" · ") || "—"}
                           </div>
+                          {j.has_research && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setPackageFor(j); }}
+                              className="mt-1.5 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+                            >
+                              📄 Welcome package
+                            </button>
+                          )}
                         </td>
                         <td className="px-4 py-4 align-top">
                           <div className="text-zinc-300 leading-[1.35]">{j.location || "—"}</div>
@@ -1336,6 +1364,179 @@ function DetailRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-start justify-between gap-3 border-b border-white/[0.04] pb-2 text-[12px]">
       <span className="text-zinc-500">{label}</span>
       <span className="text-right text-zinc-300">{value}</span>
+    </div>
+  );
+}
+
+interface Research {
+  what_they_do?: string;
+  outlook?: string;
+  outlook_signal?: string;
+  outlook_sources?: string[];
+  glassdoor_rating?: number | null;
+  glassdoor_url?: string;
+  glassdoor_review_count?: number | null;
+  satisfaction_note?: string;
+  cover_letter?: string;
+  resume_gaps?: string[];
+  resume_strengths?: string[];
+  scheduler_link?: string;
+  is_intermediary?: boolean;
+  actual_employer?: string;
+  intermediary_note?: string;
+}
+
+const SIGNAL: Record<string, { icon: string; color: string }> = {
+  growing: { icon: "📈", color: "text-emerald-400" },
+  stable: { icon: "➡️", color: "text-zinc-300" },
+  uncertain: { icon: "❓", color: "text-amber-400" },
+  declining: { icon: "📉", color: "text-rose-400" },
+  unknown: { icon: "❓", color: "text-zinc-500" },
+};
+
+/** Modal rendering the welcome-package briefing for one job. */
+function WelcomePackageModal({ job, onClose }: { job: Job; onClose: () => void }) {
+  const [data, setData] = useState<Research | null>(null);
+  const [error, setError] = useState<string>("");
+
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/jobs/${encodeURIComponent(job.job_id)}/research`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json()).error || `HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d) => { if (live) setData(d); })
+      .catch((e) => { if (live) setError(String(e.message || e)); });
+    return () => { live = false; };
+  }, [job.job_id]);
+
+  // Close on Escape — a modal that traps the user is worse than no modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const sig = SIGNAL[data?.outlook_signal || "unknown"] ?? SIGNAL.unknown;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 p-6"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950 p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-lg text-zinc-100">{job.title}</div>
+            <div className="mt-0.5 text-sm text-zinc-400">
+              {job.company} · {job.location || "—"} · score {job.resume_match}
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-100">
+            Close
+          </button>
+        </div>
+
+        {!data && !error && <div className="mt-6 text-sm text-zinc-500">Loading briefing…</div>}
+        {error && <div className="mt-6 text-sm text-rose-400">Could not load: {error}</div>}
+
+        {data && (
+          <div className="mt-5 space-y-5 text-sm">
+            {data.is_intermediary && (
+              <div className="rounded border border-amber-700/60 bg-amber-950/30 p-3 text-amber-300">
+                <span className="font-medium">⚠ Not the employer.</span>{" "}
+                {job.company} is a staffing/recruiting intermediary
+                {data.actual_employer ? <> reposting a role for <span className="font-medium">{data.actual_employer}</span></> : null}.
+                {data.intermediary_note ? ` ${data.intermediary_note}` : ""}
+              </div>
+            )}
+
+            <Section title="What they do">
+              <p className="text-zinc-300">{data.what_they_do || "—"}</p>
+            </Section>
+
+            <Section title={`Outlook ${sig.icon}`}>
+              <p className={`mb-1 ${sig.color}`}>{data.outlook_signal || "unknown"}</p>
+              <p className="text-zinc-300">{data.outlook || "No evidence found."}</p>
+              {!!data.outlook_sources?.length && (
+                <ul className="mt-2 space-y-0.5">
+                  {data.outlook_sources.map((u) => (
+                    <li key={u}>
+                      <a href={u} target="_blank" rel="noreferrer" className="text-[11px] text-zinc-500 hover:text-zinc-300 break-all">{u}</a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+
+            <Section title="Employee satisfaction">
+              {data.glassdoor_rating ? (
+                <p className="text-zinc-300">
+                  <span className="text-zinc-100">{data.glassdoor_rating}/5</span>
+                  {data.glassdoor_review_count ? ` (${data.glassdoor_review_count} reviews)` : ""}
+                  {data.glassdoor_url && (
+                    <> — <a href={data.glassdoor_url} target="_blank" rel="noreferrer" className="text-zinc-400 underline hover:text-zinc-200">Glassdoor</a></>
+                  )}
+                </p>
+              ) : (
+                <p className="text-zinc-500">No Glassdoor data found — not estimated.</p>
+              )}
+              {data.satisfaction_note && <p className="mt-1 text-[12px] text-zinc-400 italic">{data.satisfaction_note}</p>}
+            </Section>
+
+            <Section title="Cover letter">
+              <p className="whitespace-pre-wrap rounded border border-zinc-800 bg-zinc-900/50 p-3 text-zinc-300">
+                {data.cover_letter || "—"}
+              </p>
+              {data.cover_letter && (
+                <button
+                  onClick={() => navigator.clipboard?.writeText(data.cover_letter || "")}
+                  className="mt-2 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 hover:text-zinc-100"
+                >
+                  Copy
+                </button>
+              )}
+            </Section>
+
+            {!!data.resume_gaps?.length && (
+              <Section title="Where the resume is short">
+                <ul className="list-disc space-y-1 pl-4 text-zinc-300">
+                  {data.resume_gaps.map((g, i) => <li key={i}>{g}</li>)}
+                </ul>
+              </Section>
+            )}
+
+            {!!data.resume_strengths?.length && (
+              <Section title="What already lines up">
+                <ul className="list-disc space-y-1 pl-4 text-zinc-300">
+                  {data.resume_strengths.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              </Section>
+            )}
+
+            {data.scheduler_link && (
+              <Section title="Scheduler in the posting">
+                <a href={data.scheduler_link} target="_blank" rel="noreferrer" className="text-zinc-300 underline break-all">
+                  {data.scheduler_link}
+                </a>
+              </Section>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">{title}</div>
+      {children}
     </div>
   );
 }

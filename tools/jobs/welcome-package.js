@@ -37,6 +37,20 @@ const DB = process.env.WINSTON_JOBS_DB || (() => {
 })();
 
 const sql = q => execFileSync('sqlite3', ['-json', DB, q], { encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
+const esc = s => String(s ?? '').replace(/'/g, "''");
+
+/**
+ * Persist the report against the job so the board can open it in a modal, and
+ * flag intermediaries so a staffing-agency repost is visible in the table
+ * rather than looking like a direct match.
+ */
+function saveResearch(job, r) {
+  sql(`UPDATE jobs SET
+        research_json   = '${esc(JSON.stringify(r))}',
+        is_intermediary = ${r.is_intermediary ? 1 : 0},
+        actual_employer = '${esc(r.actual_employer || '')}'
+      WHERE job_id = '${esc(job.job_id)}';`);
+}
 
 function topJobs() {
   const out = sql(`
@@ -83,7 +97,10 @@ Research the company on the web, then return ONLY one line of compact JSON (no p
  "cover_letter": "<150-200 words. Warm, specific, first person. Reference something concrete and true about THIS company and connect it to the candidate's actual experience. No flattery, no cliches, no 'I am writing to express my interest'. Do not invent experience the resume does not show.>",
  "resume_gaps": ["<what the resume is missing to be competitive for THIS role - be specific and honest, e.g. 'no Kubernetes despite it being a hard requirement'>", ...],
  "resume_strengths": ["<what already lines up well for this role>", ...],
- "scheduler_link": "<any Calendly/SavvyCal/booking link the JOB DESCRIPTION itself contains, else empty>"
+ "scheduler_link": "<any Calendly/SavvyCal/booking link the JOB DESCRIPTION itself contains, else empty>",
+ "is_intermediary": <true if the listing company is a staffing agency, recruiting firm, or middleman reposting a role for a different end employer; false if they are the actual employer>,
+ "actual_employer": "<if is_intermediary, the real end employer if you can identify it, else empty>",
+ "intermediary_note": "<if is_intermediary, one sentence on what this means for the candidate, else empty>"
 }
 
 HARD RULES:
@@ -110,10 +127,16 @@ function render(job, r) {
     job.careers_url ? `[Careers page](${job.careers_url})` : '',
   ].filter(Boolean).join(' · ') || '_none published_';
 
+  const middleman = r.is_intermediary
+    ? `\n> ⚠️ **Not the employer.** ${job.company} is a staffing/recruiting intermediary`
+      + `${r.actual_employer ? ` reposting a role for **${r.actual_employer}**` : ''}.`
+      + `${r.intermediary_note ? ` ${r.intermediary_note}` : ''}\n`
+    : '';
+
   return `
 ## ${job.resume_match} — ${job.title}
 **${job.company}** · ${job.location || 'location n/a'} · ${job.salary || 'salary not stated'}
-
+${middleman}
 **What they do.** ${r.what_they_do || '_unknown_'}
 
 **Outlook ${signal} (${r.outlook_signal || 'unknown'}).** ${r.outlook || '_no evidence found_'}
@@ -159,8 +182,13 @@ function main() {
     process.stdout.write(`  [${i + 1}/${jobs.length}] ${job.company} — ${job.title.slice(0, 40)}… `);
     try {
       const r = research(job, resume);
+      saveResearch(job, r);
       md += render(job, r);
-      console.log(`ok${r.glassdoor_rating ? ` (glassdoor ${r.glassdoor_rating})` : ' (no glassdoor)'}`);
+      const bits = [
+        r.glassdoor_rating ? `glassdoor ${r.glassdoor_rating}` : 'no glassdoor',
+        r.is_intermediary ? `INTERMEDIARY${r.actual_employer ? ` → ${r.actual_employer}` : ''}` : '',
+      ].filter(Boolean);
+      console.log(`ok (${bits.join(', ')})`);
     } catch (e) {
       console.log(`FAILED: ${e.message}`);
       failures.push(job.company);

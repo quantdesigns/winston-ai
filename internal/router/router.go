@@ -122,6 +122,7 @@ func NewWithManager(manager *agents.Manager) http.Handler {
 		r.Delete("/schedules/{id}", manager.DeleteSchedule)
 		r.Get("/jobs", handleListJobs)
 		r.Get("/jobs/stats", handleJobsStats)
+		r.Get("/jobs/{id}/research", handleJobResearch)
 		r.Put("/jobs/{id}/status", handleJobStatusUpdate)
 		r.Put("/jobs/{id}/flag", handleJobFlagUpdate)
 		r.Put("/jobs/{id}/variant", handleJobVariantUpdate)
@@ -308,9 +309,12 @@ type responseBuffer struct {
 	body   []byte
 }
 
-func (rb *responseBuffer) Header() http.Header       { return rb.header }
-func (rb *responseBuffer) WriteHeader(code int)       { rb.code = code }
-func (rb *responseBuffer) Write(b []byte) (int, error) { rb.body = append(rb.body, b...); return len(b), nil }
+func (rb *responseBuffer) Header() http.Header  { return rb.header }
+func (rb *responseBuffer) WriteHeader(code int) { rb.code = code }
+func (rb *responseBuffer) Write(b []byte) (int, error) {
+	rb.body = append(rb.body, b...)
+	return len(b), nil
+}
 
 // restartServices rebuilds and restarts the Go router and Next.js frontend via launchctl.
 // The script is detached into its own process group so it survives this process being killed

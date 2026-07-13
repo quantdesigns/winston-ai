@@ -133,6 +133,30 @@ func handleJobDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleJobResearch serves the welcome-package briefing for one job, which the
+// jobs board renders in a modal. Returns 404 when the job has not been
+// researched (only a run's top matches are).
+func handleJobResearch(w http.ResponseWriter, r *http.Request) {
+	s, err := getJobStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	raw, err := s.Research(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if raw == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no welcome package for this job yet"})
+		return
+	}
+	// research_json is already JSON — pass it through rather than re-encoding.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(raw))
+}
+
 func handleJobsStats(w http.ResponseWriter, r *http.Request) {
 	s, err := getJobStore()
 	if err != nil {
