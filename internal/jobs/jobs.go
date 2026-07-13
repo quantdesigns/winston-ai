@@ -139,8 +139,20 @@ type ListFilter struct {
 // application history.
 const staleExcludeSQL = ` AND (
 	application_status IN ('applied','interviewing','offered','withdrawn','needs_manual','application_failed')
-	OR posted_at = ''
-	OR posted_at >= date('now', '-60 days')
+	OR (
+		-- An untouched 'new' job rolls off the board 2 days after we first see
+		-- it. Anchored to first_seen_at, not posted_at: a listing posted last
+		-- week but scraped today is still a live lead, whereas one we scraped
+		-- months ago has gone stale whatever its posted date says.
+		application_status = 'new'
+		AND first_seen_at >= date('now', '-2 days')
+		AND (posted_at = '' OR posted_at >= date('now', '-60 days'))
+	)
+	OR (
+		-- Everything mid-funnel (e.g. drafted) keeps the wider 60-day window.
+		application_status NOT IN ('new','applied','interviewing','offered','withdrawn','needs_manual','application_failed')
+		AND (posted_at = '' OR posted_at >= date('now', '-60 days'))
+	)
 )`
 
 // ListJobs returns rows ordered for the UI.

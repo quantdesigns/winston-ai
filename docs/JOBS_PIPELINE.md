@@ -57,6 +57,8 @@ They read `APIFY_TOKEN` and `SERPAPI_KEY` from the environment (or
 | `serpapi-google-jobs.js` | Google Jobs via SerpAPI. Google is deliberately *not* an Apify actor. |
 | `company-contacts.js` | Resolves a company's public careers page and corporate role mailbox. Company-level only — rejects anything person-shaped. |
 | `jobs-db.js` | Schema + import/update against the jobs SQLite DB. |
+| `score-jobs.js` | Rates jobs 0-100 against the resume via the `claude` CLI. The import path stores every row at 0; this fills it in. Runs on subscription auth — no API key. |
+| `welcome-package.js` | Deep-research briefing for a run's top matches: what the company does, a sourced growth read, the real Glassdoor rating, company-published contacts, a cover letter, and a resume-gap analysis. Unfound facts stay `null` — nothing is estimated. |
 
 The auto-apply tools (`jobs-apply.js`, `upwork-apply.js`) are **not** in this
 repo. They embed the applicant's real name, address, phone, and email in order

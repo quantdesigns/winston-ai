@@ -1046,6 +1046,18 @@ func runMultiSourceScrape(runID string, sources []jobSource, queries []string, l
 	// Auto-import into the jobs DB so the table populates with zero manual
 	// steps. The scrape *is* the pipeline — no report, no button.
 	imported, updated, _, ierr := importWizardItems(runID, itemsForImport)
+
+	// Score before reporting done. The importer stores every row at
+	// resume_match = 0, so without this the board renders a table the user
+	// cannot rank — which is the whole point of the scrape.
+	if ierr == nil && imported > 0 {
+		scoreImportedJobs(runID)
+		// Research the best matches once they're scored. Fire-and-forget: the
+		// briefing takes minutes (web research per company) and the board is
+		// already usable without it, so it must not hold the run open.
+		go buildWelcomePackage(runID)
+	}
+
 	setPreviewRun(runID, func(r *previewRun) {
 		r.Imported = imported
 		r.Updated = updated
@@ -1054,6 +1066,53 @@ func runMultiSourceScrape(runID string, sources []jobSource, queries []string, l
 		}
 		r.Status = "done"
 	})
+}
+
+// buildWelcomePackage researches the top matches of a run — what the company
+// does, a sourced growth/profitability read, the real Glassdoor rating, a cover
+// letter, and an honest resume-gap analysis — and writes a markdown briefing.
+//
+// Runs on a "better model" (opus) with web search, on the Claude subscription,
+// so it costs no API spend. Best-effort: the board stands on its own without it.
+func buildWelcomePackage(runID string) {
+	tool := filepath.Join(jobs.ToolsDir(), "welcome-package.js")
+	if _, err := os.Stat(tool); err != nil {
+		log.Printf("[wizard %s] welcome package skipped: welcome-package.js not found", runID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "node", tool, "--top", "10", "--model", "opus")
+	cmd.Env = append(os.Environ(), loadClaudeEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[wizard %s] welcome package failed: %v — %s", runID, err, truncate(string(out), 200))
+		return
+	}
+	log.Printf("[wizard %s] welcome package: %s", runID, truncate(strings.TrimSpace(string(out)), 300))
+}
+
+// scoreImportedJobs rates any unscored rows against the candidate's resume via
+// score-jobs.js. Best-effort: a scoring failure leaves resume_match at 0 rather
+// than failing the scrape, since the jobs themselves imported fine.
+func scoreImportedJobs(runID string) {
+	tool := filepath.Join(jobs.ToolsDir(), "score-jobs.js")
+	if _, err := os.Stat(tool); err != nil {
+		log.Printf("[wizard %s] scoring skipped: score-jobs.js not found", runID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "node", tool, "--limit", "300", "--batch", "20")
+	cmd.Env = append(os.Environ(), loadClaudeEnv()...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[wizard %s] scoring failed: %v — %s", runID, err, truncate(string(out), 200))
+		return
+	}
+	log.Printf("[wizard %s] scoring done: %s", runID, truncate(strings.TrimSpace(string(out)), 300))
 }
 
 // setSourceProgress updates a single source's progress record atomically.

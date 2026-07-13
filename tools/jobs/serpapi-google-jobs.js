@@ -69,6 +69,24 @@ function fetchJson(urlPath) {
   });
 }
 
+/**
+ * Google Jobs only ever reports a RELATIVE age ("20 hours ago", "4 days ago") —
+ * there is no absolute date in the response. Convert it to a YYYY-MM-DD date at
+ * scrape time, which is when the relative offset is actually meaningful. Rows
+ * whose age Google omits stay empty rather than being guessed at.
+ */
+function postedAtToDate(rel) {
+  if (!rel) return '';
+  const m = String(rel).trim().toLowerCase().match(/(\d+)\+?\s*(hour|day|week|month|year|minute)s?\s*ago/);
+  if (!m) return '';
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n)) return '';
+  const perUnit = { minute: 1 / 1440, hour: 1 / 24, day: 1, week: 7, month: 30, year: 365 };
+  const days = n * (perUnit[m[2]] ?? 0);
+  const d = new Date(Date.now() - days * 86400_000);
+  return d.toISOString().slice(0, 10);
+}
+
 function normalize(job) {
   const ext = job.detected_extensions || {};
   const via = job.via || '';
@@ -98,7 +116,8 @@ function normalize(job) {
     salary: ext.salary || '',
     applicants: '',
     easyApply: '',
-    postedAt: ext.posted_at || '',
+    postedAt: postedAtToDate(ext.posted_at),
+    postedAgo: ext.posted_at || '', // keep the raw relative string for reference
     jobUrl: applyUrl || job.share_link || '',
     applyUrl: applyUrl || job.share_link || '',
     skills: '',
