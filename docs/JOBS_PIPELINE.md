@@ -35,8 +35,34 @@ pipeline is portable):
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `WINSTON_JOBS_DB` | `~/.claude/data/jobs.db` | SQLite DB the agents read and write. |
-| `WINSTON_JOBS_TOOLS_DIR` | `~/.claude/tools/jobs` | Directory holding the Node helper tools (scrapers, jobs-db, jobs-apply, upwork-apply). |
+| `WINSTON_JOBS_TOOLS_DIR` | `~/.claude/tools/jobs` | Directory holding the Node helper tools. |
 | `WINSTON_DRIVE_CREDS_FILE` | `drive-creds.json` | Filename of the google-workspace MCP credentials JSON used by the Drive preflight (typically `<your-email>.json`). |
+
+## Helper tools
+
+The scrape/score/contact tools ship in [`tools/jobs/`](../tools/jobs). Point
+`WINSTON_JOBS_TOOLS_DIR` at that directory to run the pipeline from a fresh
+clone:
+
+```bash
+export WINSTON_JOBS_TOOLS_DIR="$PWD/tools/jobs"
+```
+
+They read `APIFY_TOKEN` and `SERPAPI_KEY` from the environment (or
+`~/.claude/.env`) — no keys are committed.
+
+| Tool | Purpose |
+|------|---------|
+| `apify-{linkedin,indeed,glassdoor,upwork}-jobs.js` | Marketplace scrapers (Apify actors). |
+| `serpapi-google-jobs.js` | Google Jobs via SerpAPI. Google is deliberately *not* an Apify actor. |
+| `company-contacts.js` | Resolves a company's public careers page and corporate role mailbox. Company-level only — rejects anything person-shaped. |
+| `jobs-db.js` | Schema + import/update against the jobs SQLite DB. |
+
+The auto-apply tools (`jobs-apply.js`, `upwork-apply.js`) are **not** in this
+repo. They embed the applicant's real name, address, phone, and email in order
+to fill application forms, so publishing them would leak personal data. Keep
+them in `~/.claude/tools/` and set `WINSTON_JOBS_TOOLS_DIR` there if you use
+the apply flow; the endpoints that call them return "tool missing" otherwise.
 
 The agent flow expects companion Claude agent files in
 `~/.claude/agents/` named `jobs-weekly`, `jobs-personal-linkedin`, and
