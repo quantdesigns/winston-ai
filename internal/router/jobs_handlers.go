@@ -211,6 +211,83 @@ func handleJobFlagUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "flagged": body.Flagged})
 }
 
+// contactResult mirrors the JSON emitted by company-contacts.js.
+type contactResult struct {
+	RecruitingEmail string `json:"recruiting_email"`
+	ContactType     string `json:"contact_type"`
+	CareersURL      string `json:"careers_url"`
+	Found           bool   `json:"found"`
+	Error           string `json:"error,omitempty"`
+}
+
+// handleJobsEnrichContacts looks up each company's PUBLIC recruiting contact —
+// a corporate role mailbox (careers@, jobs@ ...) or the careers page — and
+// stores it against every job for that company. It never resolves an
+// individual's contact details; company-contacts.js enforces that boundary.
+func handleJobsEnrichContacts(w http.ResponseWriter, r *http.Request) {
+	s, err := getJobStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	limit := 25
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	pending, err := s.CompaniesNeedingContact(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	tool := filepath.Join(jobs.ToolsDir(), "company-contacts.js")
+	if _, err := os.Stat(tool); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tool missing: company-contacts.js"})
+		return
+	}
+
+	var withEmail, withCareers, updated int
+	for _, c := range pending {
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		cmd := exec.CommandContext(ctx, "node", tool, "--website", c.Website, "--company", c.Company, "--json")
+		cmd.Env = append(os.Environ(), loadClaudeEnv()...)
+		out, runErr := cmd.Output()
+		cancel()
+		if runErr != nil {
+			log.Printf("[jobs-contacts] %s: %v", c.Company, runErr)
+			continue
+		}
+		var res contactResult
+		if err := json.Unmarshal(out, &res); err != nil || !res.Found {
+			continue
+		}
+		n, err := s.SetCompanyContact(c.Company, res.RecruitingEmail, res.ContactType, res.CareersURL)
+		if err != nil {
+			log.Printf("[jobs-contacts] store %s: %v", c.Company, err)
+			continue
+		}
+		updated += int(n)
+		if res.RecruitingEmail != "" {
+			withEmail++
+		}
+		if res.CareersURL != "" {
+			withCareers++
+		}
+	}
+
+	log.Printf("[jobs-contacts] %d companies checked, %d with email, %d with careers page, %d job rows updated",
+		len(pending), withEmail, withCareers, updated)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":            "ok",
+		"companies_checked": len(pending),
+		"with_email":        withEmail,
+		"with_careers_page": withCareers,
+		"jobs_updated":      updated,
+	})
+}
+
 // handleJobsPrune deletes rows older than 8 weeks (per PruneStale) and
 // returns the number removed. The weekly orchestrator calls this as Stage 0.
 func handleJobsPrune(w http.ResponseWriter, r *http.Request) {
@@ -381,7 +458,7 @@ func handleJobsApplySelectedInteractive(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "home dir: " + err.Error()})
 		return
 	}
-	toolPath := filepath.Join(home, ".claude", "tools", "jobs", "jobs-apply.js")
+	toolPath := filepath.Join(jobs.ToolsDir(), "jobs-apply.js")
 	if _, err := os.Stat(toolPath); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "jobs-apply.js not found at " + toolPath})
 		return
@@ -468,7 +545,7 @@ func handleJobsApplyUpworkSelected(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "home dir: " + err.Error()})
 		return
 	}
-	toolPath := filepath.Join(home, ".claude", "tools", "jobs", "upwork-apply.js")
+	toolPath := filepath.Join(jobs.ToolsDir(), "upwork-apply.js")
 	if _, err := os.Stat(toolPath); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "upwork-apply.js not found at " + toolPath})
 		return
@@ -707,9 +784,9 @@ type sourceProgress struct {
 
 // jobSource describes one marketplace scraper.
 type jobSource struct {
-	ID        string // "linkedin", "indeed", "glassdoor", "google"
-	Label     string
-	ToolFile  string // script under ~/.claude/tools/jobs/
+	ID       string // "linkedin", "indeed", "glassdoor", "google"
+	Label    string
+	ToolFile string // script under ~/.claude/tools/jobs/
 }
 
 // jobSources is the canonical registry. Adding a new marketplace = add a row
@@ -771,6 +848,7 @@ func pruneOldPreviewRuns() {
 		}
 	}
 }
+
 // The wizard is a single-modal flow in the UI:
 //   1. user fills titles/location/remote/salary/sources
 //   2. POST /preview kicks off a multi-source scrape, returns a run_id
@@ -780,10 +858,10 @@ func pruneOldPreviewRuns() {
 // Philip's hand-maintained Drive variants instead (see jobs-personal-linkedin).
 
 type wizardTitle struct {
-	Title       string `json:"title"`
-	Count       int    `json:"count"`
-	SampleJob   string `json:"sample_job"`
-	SampleSalary string `json:"sample_salary"`
+	Title          string `json:"title"`
+	Count          int    `json:"count"`
+	SampleJob      string `json:"sample_job"`
+	SampleSalary   string `json:"sample_salary"`
 	SampleLocation string `json:"sample_location"`
 }
 
@@ -844,7 +922,6 @@ func handleWizardPreview(w http.ResponseWriter, r *http.Request) {
 
 	// Validate sources and locate tool paths up front so a bad request fails
 	// synchronously rather than silently in a goroutine.
-	home, _ := os.UserHomeDir()
 	selected := make([]jobSource, 0, len(body.Sources))
 	for _, id := range body.Sources {
 		src, ok := findJobSource(id)
@@ -852,7 +929,7 @@ func handleWizardPreview(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown source: " + id})
 			return
 		}
-		toolPath := filepath.Join(home, ".claude", "tools", "jobs", src.ToolFile)
+		toolPath := filepath.Join(jobs.ToolsDir(), src.ToolFile)
 		if _, err := os.Stat(toolPath); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tool missing for " + src.ID + ": " + src.ToolFile})
 			return
@@ -924,9 +1001,11 @@ func runMultiSourceScrape(runID string, sources []jobSource, queries []string, l
 			}
 			setSourceProgress(runID, src.ID, func(p *sourceProgress) {
 				if totalItems == 0 && sourceErr != "" {
-					p.Status = "error"; p.Error = sourceErr
+					p.Status = "error"
+					p.Error = sourceErr
 				} else {
-					p.Status = "done"; p.Items = totalItems
+					p.Status = "done"
+					p.Items = totalItems
 				}
 			})
 		}(s)
@@ -1048,7 +1127,8 @@ func mergeIntoRun(runID string, items []map[string]any) {
 				seen := false
 				for _, s := range srcs {
 					if s == src {
-						seen = true; break
+						seen = true
+						break
 					}
 				}
 				if !seen {
@@ -1322,8 +1402,7 @@ func importWizardItems(runID string, items []map[string]any) (imported, updated 
 	}
 	tmp.Close()
 
-	home, _ := os.UserHomeDir()
-	jobsDB := filepath.Join(home, ".claude", "tools", "jobs", "jobs-db.js")
+	jobsDB := filepath.Join(jobs.ToolsDir(), "jobs-db.js")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "node", jobsDB, "import", tmp.Name())
@@ -1406,5 +1485,3 @@ func leadingInt(s string) int {
 	n, _ := strconv.Atoi(s[:end])
 	return n
 }
-
-

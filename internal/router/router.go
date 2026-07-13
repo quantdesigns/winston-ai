@@ -128,6 +128,7 @@ func NewWithManager(manager *agents.Manager) http.Handler {
 		r.Delete("/jobs/{id}", handleJobDelete)
 		r.Post("/jobs/trigger", handleJobsTrigger(manager))
 		r.Post("/jobs/prune", handleJobsPrune)
+		r.Post("/jobs/enrich-contacts", handleJobsEnrichContacts)
 		r.Post("/jobs/apply-from-drive", handleJobsApplyFromDrive(manager))
 		r.Post("/jobs/apply-selected", handleJobsApplySelected(manager))
 		r.Post("/jobs/apply-selected-interactive", handleJobsApplySelectedInteractive)

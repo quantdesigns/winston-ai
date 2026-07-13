@@ -15,6 +15,9 @@ interface Job {
   company_description: string;
   company_employees: string;
   company_hq: string;
+  contact_email: string;
+  contact_type: string;
+  careers_url: string;
   industry: string;
   location: string;
   workplace_type: string;
@@ -1205,6 +1208,34 @@ export default function JobsPage() {
                                     {j.job_url && <LinkChip href={j.job_url} label="LinkedIn job" />}
                                   </div>
                                 </div>
+
+                                {(j.contact_email || j.careers_url) && (
+                                  <div className="pt-3">
+                                    <div className="text-[11px] uppercase tracking-wide text-zinc-500">
+                                      Recruiting contact
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                      {j.careers_url && <LinkChip href={j.careers_url} label="Careers page" />}
+                                      {j.contact_email && (
+                                        <a
+                                          href={`mailto:${j.contact_email}`}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="rounded border border-zinc-700 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+                                        >
+                                          {j.contact_email}
+                                        </a>
+                                      )}
+                                      {j.contact_type === "generic" && (
+                                        <span
+                                          className="text-[10px] text-zinc-500"
+                                          title="Company's general mailbox, published on their careers page — not a recruiter's personal address."
+                                        >
+                                          general inbox
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
 
                                 <div className="pt-3">
                                   <div className="flex items-center justify-between">

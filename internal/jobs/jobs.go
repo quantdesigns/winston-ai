@@ -28,6 +28,9 @@ type Job struct {
 	CompanyDescription string `json:"company_description"`
 	CompanyEmployees   string `json:"company_employees"`
 	CompanyHQ          string `json:"company_hq"`
+	ContactEmail       string `json:"contact_email"`
+	ContactType        string `json:"contact_type"`
+	CareersURL         string `json:"careers_url"`
 	Industry           string `json:"industry"`
 	Location           string `json:"location"`
 	WorkplaceType      string `json:"workplace_type"`
@@ -103,6 +106,12 @@ func NewStore() (*Store, error) {
 	// Lazy migration: add source column. Pre-Upwork rows are all from LinkedIn,
 	// so default to 'linkedin'. New imports populate explicitly via jobs-db.js.
 	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN source TEXT DEFAULT 'linkedin'`)
+	// Lazy migration: company-level recruiting contact, filled by the
+	// enrich-contacts pass (company-contacts.js). Corporate role mailboxes and
+	// careers pages only — never an individual's address.
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN contact_email TEXT DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN contact_type TEXT DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE jobs ADD COLUMN careers_url TEXT DEFAULT ''`)
 	_, _ = db.Exec(`UPDATE jobs SET source = 'linkedin' WHERE source IS NULL OR source = ''`)
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source)`)
 	return &Store{db: db, dbPath: dbPath}, nil
@@ -142,7 +151,8 @@ func (s *Store) ListJobs(f ListFilter) ([]Job, error) {
 		salary, skills, benefits, applicants, easy_apply, posted_at, apply_url, job_url,
 		description_summary, category, resume_match, application_status, resume_variant,
 		drive_folder_url, notes, first_seen_at, last_seen_at, applied_at, week_tag,
-		COALESCE(flagged, 0), COALESCE(source, 'linkedin')
+		COALESCE(flagged, 0), COALESCE(source, 'linkedin'),
+		COALESCE(contact_email, ''), COALESCE(contact_type, ''), COALESCE(careers_url, '')
 		FROM jobs WHERE 1=1`
 	var args []any
 	if f.Status != "" && f.Status != "all" {
@@ -197,17 +207,22 @@ func (s *Store) ListJobs(f ListFilter) ([]Job, error) {
 			stdTitle, cURL, cWeb, cDesc, cEmp, cHQ, ind, loc, wType, rem, sen, emp, fn,
 			yrs, edu, sal, sk, ben, apps, easy, posted, applyU, jobU, desc, cat, variant,
 			drive, notes, firstSeen, lastSeen, appliedAt, weekTag sql.NullString
-			flagged int
-			source  string
+			flagged                               int
+			source                                string
+			contactEmail, contactType, careersURL string
 		)
 		if err := rows.Scan(
 			&j.JobID, &j.Title, &stdTitle, &j.Company, &cURL, &cWeb, &cDesc, &cEmp, &cHQ,
 			&ind, &loc, &wType, &rem, &sen, &emp, &fn, &yrs, &edu, &sal, &sk, &ben, &apps,
 			&easy, &posted, &applyU, &jobU, &desc, &cat, &j.ResumeMatch, &j.ApplicationStatus,
 			&variant, &drive, &notes, &firstSeen, &lastSeen, &appliedAt, &weekTag, &flagged, &source,
+			&contactEmail, &contactType, &careersURL,
 		); err != nil {
 			return nil, err
 		}
+		j.ContactEmail = contactEmail
+		j.ContactType = contactType
+		j.CareersURL = careersURL
 		j.Source = source
 		j.Flagged = flagged == 1
 		j.StandardizedTitle = stdTitle.String
@@ -437,23 +452,69 @@ func (s *Store) SetFlag(jobID string, flagged bool) error {
 	return nil
 }
 
-// RunTool executes a node helper tool under ~/.claude/tools/jobs (override
-// with WINSTON_JOBS_TOOLS_DIR) and streams its combined output into the
-// returned channel. Used for the "Run now" button.
-func RunTool(tool string, args []string) (string, error) {
-	home, _ := os.UserHomeDir()
-	toolsDir := os.Getenv("WINSTON_JOBS_TOOLS_DIR")
-	if toolsDir == "" {
-		// Same fallback as the DB: prefer an existing codephil tools dir,
-		// fall back to the generic jobs/ default.
-		codephil := filepath.Join(home, ".claude", "tools", "codephil")
-		if _, err := os.Stat(codephil); err == nil {
-			toolsDir = codephil
-		} else {
-			toolsDir = filepath.Join(home, ".claude", "tools", "jobs")
-		}
+// CompanyNeedingContact is one company awaiting a recruiting-contact lookup.
+type CompanyNeedingContact struct {
+	Company string
+	Website string
+}
+
+// CompaniesNeedingContact returns distinct companies that have a website but no
+// contact looked up yet — one row per company, so enrichment fetches each site
+// once rather than once per job.
+func (s *Store) CompaniesNeedingContact(limit int) ([]CompanyNeedingContact, error) {
+	rows, err := s.db.Query(`
+		SELECT company, MIN(company_website)
+		FROM jobs
+		WHERE company_website IS NOT NULL AND company_website != ''
+		  AND COALESCE(contact_email, '') = '' AND COALESCE(careers_url, '') = ''
+		GROUP BY company
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
 	}
-	scriptPath := filepath.Join(toolsDir, tool)
+	defer rows.Close()
+	var out []CompanyNeedingContact
+	for rows.Next() {
+		var c CompanyNeedingContact
+		if err := rows.Scan(&c.Company, &c.Website); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SetCompanyContact writes the looked-up contact onto every job for that
+// company. Contact data is company-level, so it is stored per company.
+func (s *Store) SetCompanyContact(company, email, contactType, careersURL string) (int64, error) {
+	res, err := s.db.Exec(
+		`UPDATE jobs SET contact_email = ?, contact_type = ?, careers_url = ? WHERE company = ?`,
+		email, contactType, careersURL, company)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ToolsDir resolves the directory holding the node helper tools. Override with
+// WINSTON_JOBS_TOOLS_DIR; otherwise prefer an existing codephil tools dir (the
+// historical Winston layout) and fall back to the generic jobs/ default.
+func ToolsDir() string {
+	if dir := os.Getenv("WINSTON_JOBS_TOOLS_DIR"); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	codephil := filepath.Join(home, ".claude", "tools", "codephil")
+	if _, err := os.Stat(codephil); err == nil {
+		return codephil
+	}
+	return filepath.Join(home, ".claude", "tools", "jobs")
+}
+
+// RunTool executes a node helper tool from ToolsDir and returns its combined
+// output. Used for the "Run now" button.
+func RunTool(tool string, args []string) (string, error) {
+	scriptPath := filepath.Join(ToolsDir(), tool)
 	if _, err := os.Stat(scriptPath); err != nil {
 		return "", fmt.Errorf("tool not found: %s", scriptPath)
 	}
