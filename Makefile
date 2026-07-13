@@ -18,7 +18,7 @@ frontend:
 
 # Run both router and frontend
 all:
-	@echo "Starting Polymr..."
+	@echo "Starting Winston..."
 	@make run &
 	@make frontend
 

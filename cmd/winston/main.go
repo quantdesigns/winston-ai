@@ -41,7 +41,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Polymr router listening on %s:%s", bind, port)
+		log.Printf("Winston router listening on %s:%s", bind, port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			notify.Shutdown("server error: " + err.Error())
 			log.Fatalf("server error: %v", err)

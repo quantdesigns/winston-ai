@@ -1,5 +1,5 @@
 #!/bin/bash
-# Restart all Winston/Polymr services
+# Restart all Winston services
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

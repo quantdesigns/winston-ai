@@ -1,5 +1,5 @@
 #!/bin/bash
-# Uninstall Polymr background services (macOS launchd or Linux systemd)
+# Uninstall Winston background services (macOS launchd or Linux systemd)
 set -e
 
 OS="$(uname -s)"

@@ -224,7 +224,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:57710
 tailscale serve status
 ```
 
-Open the printed `https://<machine>.<tailnet>.ts.net` URL from any device signed in to the same tailnet. Basic Auth still applies on top.
+Open the printed `https://<machine>.<tailnet>.ts.net` URL from any device signed in to the same tailnet.
 
 Slack does not need any of this — Socket Mode works regardless.
 

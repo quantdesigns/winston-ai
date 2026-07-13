@@ -236,7 +236,7 @@ curl -X POST -u "$USER:$PASS" http://localhost:49710/api/agents/winston/run \
 
 Two things are worth being honest about:
 
-**The HTTP surface is small and locked down.** The router and the Next.js frontend bind to `127.0.0.1` only. Every `/api/*` request goes through rate limiting, Basic Auth, input sanitization (4k char truncation, known prompt-injection patterns stripped), and an audit log. CSP, `X-Frame-Options: DENY`, nosniff, and referrer policy are set on every response. Full threat model: [`docs/SECURITY.md`](docs/SECURITY.md).
+**The HTTP surface is small and locked down.** The router and the Next.js frontend bind to `127.0.0.1` only. Every `/api/*` request goes through rate limiting, input sanitization (4k char truncation, known prompt-injection patterns stripped), and an audit log. CSP, `X-Frame-Options: DENY`, nosniff, and referrer policy are set on every response. Full threat model: [`docs/SECURITY.md`](docs/SECURITY.md).
 
 **Slack is the one piece that meaningfully widens the trust boundary.** Slash commands and DMs to the bot become prompts that run on your machine with your user's permissions. The mitigation is: (1) input sanitization on the way in, (2) Socket Mode so the path is outbound-only with no public endpoint, (3) workspace-level controls in Slack itself (who can install the app, who can see the bot, who can DM it). It's still worth knowing that anyone with access to that Slack workspace can ask Winston to do things, and that "things" can include running shell commands. If you're putting Winston in a busy workspace, scope every agent's system prompt deliberately and consider an allow-list of channels in `internal/slack/` before going further.
 
