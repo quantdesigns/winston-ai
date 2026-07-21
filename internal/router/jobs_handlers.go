@@ -22,6 +22,7 @@ import (
 
 	"github.com/codephilip/winston-ai/internal/agents"
 	"github.com/codephilip/winston-ai/internal/jobs"
+	"github.com/codephilip/winston-ai/internal/notify"
 )
 
 // jobStore is lazily initialized on first handler call. Failure here is
@@ -1112,9 +1113,53 @@ func buildWelcomePackage(runID string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("[wizard %s] welcome package failed: %v — %s", runID, err, truncate(string(out), 200))
+		postRunSummary(runID, "the briefing failed to build")
 		return
 	}
 	log.Printf("[wizard %s] welcome package: %s", runID, truncate(strings.TrimSpace(string(out)), 300))
+	postRunSummary(runID, "")
+}
+
+// postRunSummary sends the Slack digest for a finished run. This lives in the
+// router because the scheduled agent exits the moment it kicks the scrape off —
+// it cannot report on work that outlives it.
+func postRunSummary(runID, warning string) {
+	r, ok := getPreviewRun(runID)
+	if !ok {
+		return
+	}
+	s, err := getJobStore()
+	if err != nil {
+		return
+	}
+	top, err := s.ListJobs(jobs.ListFilter{OrderBy: "score", Limit: 5})
+	if err != nil {
+		log.Printf("[wizard %s] summary query failed: %v", runID, err)
+		return
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, ":briefcase: *Jobs run complete* — %d imported, %d updated\n", r.Imported, r.Updated)
+	for id, p := range r.Progress {
+		if p.Items == 0 {
+			fmt.Fprintf(&b, "> :warning: `%s` returned nothing\n", id)
+		}
+	}
+	if warning != "" {
+		fmt.Fprintf(&b, "> :warning: %s\n", warning)
+	}
+	b.WriteString("\n*Top matches*\n")
+	for _, j := range top {
+		flag := ""
+		if j.IsIntermediary {
+			flag = " :warning: _agency repost_"
+		}
+		fmt.Fprintf(&b, "• *%d* — %s @ %s%s\n", j.ResumeMatch, j.Title, j.Company, flag)
+	}
+	b.WriteString("\nOpen the board for the welcome packages: http://localhost:57710/jobs")
+
+	notify.JobsRun(b.String())
+	log.Printf("[wizard %s] posted Slack summary", runID)
 }
 
 // scoreImportedJobs rates any unscored rows against the candidate's resume via

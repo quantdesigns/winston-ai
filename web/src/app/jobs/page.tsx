@@ -232,15 +232,18 @@ function SkillTags({ raw }: { raw: string }) {
     () => sanitizeJoinedList(raw).split(/[,;]+/).map(s => s.trim()).filter(Boolean),
     [raw]
   );
-  const visible = all.slice(0, 4);
+  // One line, never wrapping: four wrapped chips stacked four rows deep and made
+  // every row ~133px tall, so only 7 of 100+ jobs fit on screen. The full list
+  // is one click away in the expanded row.
+  const visible = all.slice(0, 3);
   const extra = all.length - visible.length;
   if (!visible.length) return <span className="text-zinc-600">—</span>;
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-nowrap items-center gap-1 overflow-hidden" title={all.join(", ")}>
       {visible.map(s => (
         <span
           key={s}
-          className="inline-flex items-center rounded-md border border-white/[0.05] bg-white/[0.035] px-1.5 py-0.5 text-[10.5px] leading-4 text-zinc-300"
+          className="inline-flex shrink-0 items-center rounded-md border border-white/[0.05] bg-white/[0.035] px-1.5 py-0.5 text-[10.5px] leading-4 text-zinc-300"
         >
           {s}
         </span>
@@ -323,6 +326,21 @@ function VariantPicker({
 function formatSalary(s: string) {
   if (!s) return "—";
   return s.replace(/\s+/g, " ").trim();
+}
+
+function hasSalary(s: string) {
+  return Boolean(s && s.trim() && s.trim() !== "—");
+}
+
+/**
+ * True only when a location narrows anything down. Remote listings overwhelmingly
+ * say "United States" or "Anywhere", which is a column's worth of space spent
+ * saying nothing — so those are treated as absent.
+ */
+function isSpecificLocation(loc: string) {
+  if (!loc || !loc.trim()) return false;
+  const l = loc.trim().toLowerCase();
+  return !["united states", "anywhere", "remote", "usa", "us", "worldwide", "n/a", "—"].includes(l);
 }
 
 function formatRelative(dateStr: string) {
@@ -1015,8 +1033,6 @@ export default function JobsPage() {
                   <SortHeader label="Role" sortKey="title" active={sortKey} dir={sortDir} onClick={toggleSort} />
                   <th className="px-4 py-3 text-left font-medium">Resume</th>
                   <SortHeader label="Company" sortKey="company" active={sortKey} dir={sortDir} onClick={toggleSort} />
-                  <SortHeader label="Location" sortKey="location" active={sortKey} dir={sortDir} onClick={toggleSort} />
-                  <SortHeader label="Salary" sortKey="salary" active={sortKey} dir={sortDir} onClick={toggleSort} />
                   <th className="px-4 py-3 text-left font-medium">Skills</th>
                   <SortHeader label="Posted" sortKey="posted" active={sortKey} dir={sortDir} onClick={toggleSort} />
                   <th className="px-4 py-3 text-right font-medium">Action</th>
@@ -1043,7 +1059,7 @@ export default function JobsPage() {
                           isApplying ? "bg-indigo-500/[0.05]" : isSelected ? "bg-indigo-500/[0.035]" : ""
                         }`}
                       >
-                        <td className="relative w-10 px-4 py-4 align-top" onClick={e => e.stopPropagation()}>
+                        <td className="relative w-10 px-4 py-2.5 align-top" onClick={e => e.stopPropagation()}>
                           {isApplying && <span className="absolute left-0 top-0 h-full w-[3px] bg-indigo-400" />}
                           <div className="flex h-[22px] items-center">
                             <input
@@ -1055,86 +1071,97 @@ export default function JobsPage() {
                             />
                           </div>
                         </td>
-                        <td className="px-4 py-4 align-top">
+                        <td className="px-4 py-2.5 align-top">
                           <div className={`inline-flex h-[22px] min-w-[44px] items-center justify-center rounded-lg border px-2 text-[13px] font-semibold tabular-nums ${scoreBg(j.resume_match)} ${scoreColor(j.resume_match)}`}>
                             {j.resume_match}
                           </div>
                         </td>
-                        <td className="px-4 py-4 align-top">
+                        <td className="px-4 py-2.5 align-top">
                           <div className="flex h-[22px] items-center">
                             {isApplying ? <ApplyingChip /> : <StatusChip status={j.application_status} firstSeenAt={j.first_seen_at} />}
                           </div>
                         </td>
-                        <td className="px-4 py-4 align-top min-w-[200px]">
-                          <div className="flex items-center gap-2">
-                            <div className="font-medium text-zinc-100 leading-[1.35]">{j.title}</div>
+                        <td className="px-4 py-2.5 align-top w-[280px] max-w-[280px]">
+                          <div className="flex items-start gap-2">
+                            {/* Clamp: an untruncated title like "Software Engineer II (Node,
+                                React, Typescript)" wraps to 4 lines and drags the whole row
+                                out of alignment with its neighbours. */}
+                            <div className="font-medium text-zinc-100 leading-[1.35] line-clamp-2" title={j.title}>
+                              {j.title}
+                            </div>
                             <SourceBadge source={j.source} />
                           </div>
-                          <div className="mt-1 text-[11px] leading-tight text-zinc-500">
+                          <div className="mt-1 text-[11px] leading-tight text-zinc-500 truncate">
                             {j.seniority_level || j.employment_type || j.category || "—"}
                           </div>
                         </td>
-                        <td className="px-4 py-4 align-top" onClick={e => e.stopPropagation()}>
+                        <td className="px-4 py-2.5 align-top" onClick={e => e.stopPropagation()}>
                           <VariantPicker value={j.resume_variant} onChange={(v) => updateVariant(j.job_id, v)} />
                         </td>
-                        <td className="px-4 py-4 align-top min-w-[180px]">
-                          <div className="text-zinc-200 leading-[1.35]">{j.company}</div>
-                          {j.is_intermediary && (
-                            <div
-                              className="mt-1 inline-flex items-center gap-1 rounded border border-amber-700/60 bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-400"
-                              title={
-                                j.actual_employer
-                                  ? `Staffing/recruiting agency reposting a role for ${j.actual_employer} — not the employer.`
-                                  : "Staffing/recruiting agency reposting someone else's role — not the employer."
-                              }
-                            >
-                              ⚠ agency
-                              {j.actual_employer ? <span className="text-amber-500/80">→ {j.actual_employer}</span> : null}
-                            </div>
-                          )}
-                          <div className="mt-1 text-[11px] leading-tight text-zinc-500 truncate max-w-[220px]">
-                            {[j.company_employees, j.industry].filter(Boolean).join(" · ") || "—"}
-                          </div>
-                          {j.has_research && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setPackageFor(j); }}
-                              className="mt-1.5 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
-                            >
-                              📄 Welcome package
-                            </button>
-                          )}
-                        </td>
-                        <td className="px-4 py-4 align-top">
-                          <div className="text-zinc-300 leading-[1.35]">{j.location || "—"}</div>
-                          <div className="mt-1 h-[16px]">
-                            {j.remote === "true" && (
-                              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] leading-none text-emerald-300">
-                                <span className="h-1 w-1 rounded-full bg-emerald-400" />
-                                Remote
+                        {/* Company absorbs salary and location. Both had their own column
+                            and both were mostly noise: salary is filled on 26% of rows, and
+                            location reads "United States"/"Anywhere" on 82% of them. Show
+                            each only when it actually says something. */}
+                        <td className="px-4 py-2.5 align-top w-[300px] max-w-[300px]">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-zinc-200 leading-[1.35]">{j.company}</span>
+                            {j.is_intermediary && (
+                              <span
+                                className="shrink-0 rounded border border-amber-700/60 bg-amber-950/40 px-1 py-0.5 text-[10px] leading-none text-amber-400"
+                                title={
+                                  j.actual_employer
+                                    ? `Staffing/recruiting agency reposting a role for ${j.actual_employer} — not the employer.`
+                                    : "Staffing/recruiting agency reposting someone else's role — not the employer."
+                                }
+                              >
+                                ⚠ agency
                               </span>
                             )}
                           </div>
+                          <div className="mt-1 flex items-center gap-1.5 text-[11px] leading-tight text-zinc-500">
+                            {isSpecificLocation(j.location) && <span className="truncate">{j.location}</span>}
+                            {j.remote === "true" && (
+                              <span className="shrink-0 rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] leading-none text-emerald-300">
+                                Remote
+                              </span>
+                            )}
+                            {hasSalary(j.salary) && (
+                              <span className="shrink-0 tabular-nums text-zinc-400">{formatSalary(j.salary)}</span>
+                            )}
+                            {!isSpecificLocation(j.location) && !hasSalary(j.salary) && j.remote !== "true" && (
+                              <span className="truncate">{[j.company_employees, j.industry].filter(Boolean).join(" · ") || "—"}</span>
+                            )}
+                          </div>
                         </td>
-                        <td className="px-4 py-4 align-top text-zinc-300 tabular-nums whitespace-nowrap">
-                          <div className="leading-[1.35]">{formatSalary(j.salary)}</div>
-                        </td>
-                        <td className="px-4 py-4 align-top max-w-[240px]">
+                        <td className="px-4 py-2.5 align-top max-w-[240px]">
                           <SkillTags raw={j.skills} />
                         </td>
-                        <td className="px-4 py-4 align-top text-[12px] text-zinc-500 whitespace-nowrap">
+                        <td className="px-4 py-2.5 align-top text-[12px] text-zinc-500 whitespace-nowrap">
                           <div className="leading-[1.35]">{formatRelative(j.posted_at)}</div>
                         </td>
-                        <td className="px-4 py-4 text-right align-top">
+                        <td className="px-4 py-2.5 text-right align-top">
                           <div className="flex items-center justify-end gap-1">
+                            {/* The package holds the cover letter, the apply link and the
+                                agency warning — it belongs where the eye already goes for
+                                actions, not buried under the company name. */}
+                            {j.has_research && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setPackageFor(j); }}
+                                className="inline-flex h-[26px] items-center gap-1 rounded-md border border-indigo-500/40 bg-indigo-500/10 px-2 text-[11px] font-medium text-indigo-200 transition hover:border-indigo-400 hover:bg-indigo-500/20"
+                                title="Open the welcome package — company research, cover letter, resume gaps"
+                              >
+                                📄 Package
+                              </button>
+                            )}
                             <FlagButton flagged={!!j.flagged} onToggle={(next) => toggleFlag(j.job_id, next)} />
-                            {j.apply_url && (
+                            {(j.apply_url || j.job_url) && (
                               <a
-                                href={j.apply_url}
+                                href={j.apply_url || j.job_url}
                                 target="_blank"
                                 rel="noreferrer"
                                 onClick={e => e.stopPropagation()}
                                 className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-md border border-white/[0.06] bg-white/[0.03] text-zinc-300 hover:border-indigo-500/30 hover:bg-indigo-500/10 hover:text-indigo-200 transition"
-                                title="Open the job's apply page in a new tab"
+                                title={j.apply_url ? "Open the job's apply page in a new tab" : "No direct apply link — open the job post"}
                                 aria-label="Open apply link"
                               >
                                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -1398,6 +1425,7 @@ const SIGNAL: Record<string, { icon: string; color: string }> = {
 function WelcomePackageModal({ job, onClose }: { job: Job; onClose: () => void }) {
   const [data, setData] = useState<Research | null>(null);
   const [error, setError] = useState<string>("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -1439,6 +1467,47 @@ function WelcomePackageModal({ job, onClose }: { job: Job; onClose: () => void }
           <button onClick={onClose} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-100">
             Close
           </button>
+        </div>
+
+        {/* The briefing is where the decision gets made, so the application
+            starts here too — otherwise you read the cover letter, then go hunt
+            for the row again. apply_url is missing on ~40% of listings, so fall
+            back to the job post, which every row has. */}
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-y border-zinc-800 py-3">
+          <a
+            href={job.apply_url || job.job_url}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500"
+          >
+            {job.apply_url ? "Open apply page ↗" : "Open job post ↗"}
+          </a>
+          {data?.cover_letter && (
+            <button
+              onClick={() => {
+                navigator.clipboard?.writeText(data.cover_letter || "");
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1600);
+              }}
+              className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:border-zinc-500"
+            >
+              {copied ? "✓ Copied" : "Copy cover letter"}
+            </button>
+          )}
+          {job.contact_email && (
+            <a
+              href={`mailto:${job.contact_email}?subject=${encodeURIComponent(`Application — ${job.title}`)}`}
+              className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:border-zinc-500"
+            >
+              Email {job.contact_email}
+            </a>
+          )}
+          {job.careers_url && (
+            <a href={job.careers_url} target="_blank" rel="noreferrer"
+               className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:border-zinc-500">
+              Careers page ↗
+            </a>
+          )}
         </div>
 
         {!data && !error && <div className="mt-6 text-sm text-zinc-500">Loading briefing…</div>}
@@ -1492,14 +1561,6 @@ function WelcomePackageModal({ job, onClose }: { job: Job; onClose: () => void }
               <p className="whitespace-pre-wrap rounded border border-zinc-800 bg-zinc-900/50 p-3 text-zinc-300">
                 {data.cover_letter || "—"}
               </p>
-              {data.cover_letter && (
-                <button
-                  onClick={() => navigator.clipboard?.writeText(data.cover_letter || "")}
-                  className="mt-2 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 hover:text-zinc-100"
-                >
-                  Copy
-                </button>
-              )}
             </Section>
 
             {!!data.resume_gaps?.length && (

@@ -61,6 +61,11 @@ function topJobs() {
            substr(COALESCE(company_description, ''), 1, 800) AS company_blurb
     FROM jobs
     WHERE date(first_seen_at) = '${RUN_DATE}'
+      -- Skip anything already briefed. Without this a second run on the same day
+      -- re-picks the same top scorers and spends ~2 minutes of web research per
+      -- job re-deriving a report that already exists, while the jobs that
+      -- actually arrived in this run go unresearched.
+      AND COALESCE(research_json, '') = ''
     ORDER BY resume_match DESC
     LIMIT ${TOP};`);
   return out ? JSON.parse(out) : [];

@@ -48,6 +48,16 @@ func post(text string) {
 	}
 }
 
+// JobsRun posts the summary of a completed jobs scrape.
+//
+// The router posts this itself rather than letting the scheduled agent poll for
+// completion: the agent exits as soon as it has kicked the scrape off, so any
+// summary it promised never arrives. The router is the only thing still alive
+// when the run actually finishes.
+func JobsRun(text string) {
+	post(text)
+}
+
 // restartReasonFile is a breadcrumb left by ModelChange so Startup can report why it restarted.
 var restartReasonFile = filepath.Join(os.TempDir(), "winston-restart-reason")
 

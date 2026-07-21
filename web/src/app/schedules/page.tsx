@@ -11,6 +11,7 @@ interface AgentInfo {
   model?: string;
   workspace?: string;
   short_name?: string;
+  entry_point?: boolean;
 }
 
 interface Schedule {
@@ -67,6 +68,13 @@ const COMMON_TIMEZONES = [
   "Asia/Kolkata",
   "Australia/Sydney",
   "UTC",
+];
+
+const SLACK_CHANNELS = [
+  { label: "#rivalytics", value: "#rivalytics" },
+  { label: "#all-quant-designs", value: "#all-quant-designs" },
+  { label: "#codephil", value: "#codephil" },
+  { label: "#quizos", value: "#quizos" },
 ];
 
 const HOUR_START = 6;
@@ -603,13 +611,20 @@ function ScheduleEditor({
       />
 
       {/* Slack */}
-      <input
-        type="text"
+      <select
         value={editSlack}
         onChange={(e) => setEditSlack(e.target.value)}
-        placeholder="#channel"
         className="mb-4 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm"
-      />
+      >
+        {!SLACK_CHANNELS.some((c) => c.value === editSlack) && editSlack && (
+          <option value={editSlack}>{editSlack} (legacy)</option>
+        )}
+        {SLACK_CHANNELS.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
+          </option>
+        ))}
+      </select>
 
       <div className="flex justify-end gap-2">
         <button
@@ -978,7 +993,7 @@ export default function Schedules() {
   const [selectedDays, setSelectedDays] = useState<number[]>([1]);
   const [selectedAgent, setSelectedAgent] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [slackChannel, setSlackChannel] = useState("#winston-personal");
+  const [slackChannel, setSlackChannel] = useState(SLACK_CHANNELS[1].value);
   const [timezone, setTimezone] = useState("");
 
   useEffect(() => {
@@ -1001,10 +1016,19 @@ export default function Schedules() {
       const res = await fetch("/api/agents");
       const data = await res.json();
       setAgents(data || []);
-      // Auto-select first agent if none selected
+      // Prefer ?agent=<name> from the URL (set by the per-agent Schedule button
+      // on the home page); fall back to first agent. Reading window directly
+      // avoids the Next.js useSearchParams + Suspense prerender requirement.
       if (data?.length && !selectedAgent) {
-        setSelectedAgent(data[0].name);
-        setPrompt(getDefaultPrompt(data[0]));
+        const requested =
+          typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("agent")
+            : null;
+        const initial =
+          (requested && data.find((a: AgentInfo) => a.name === requested)) ||
+          data[0];
+        setSelectedAgent(initial.name);
+        setPrompt(getDefaultPrompt(initial));
       }
     } catch {
       /* api not running */
@@ -1114,12 +1138,16 @@ export default function Schedules() {
 
   // Filter agents for selector based on workspace filter. "personal" includes
   // both unprefixed agents and those explicitly named `personal-*`.
-  const selectableAgents =
+  // Helper sub-agents (entry_point: false) are hidden — they're called by
+  // other agents, not scheduled directly.
+  const isSchedulable = (a: AgentInfo) => a.entry_point !== false;
+  const selectableAgents = (
     wsFilter === null
       ? agents
       : wsFilter === "personal"
         ? [...standalone, ...agents.filter((a) => a.workspace === "personal")]
-        : agents.filter((a) => a.workspace === wsFilter);
+        : agents.filter((a) => a.workspace === wsFilter)
+  ).filter(isSchedulable);
 
   // Calendar events for day/week views
   const calendarEvents = useMemo(() => {
@@ -1460,13 +1488,17 @@ export default function Schedules() {
               <label className="mb-1.5 block text-sm font-medium text-zinc-300">
                 Slack Channel
               </label>
-              <input
-                type="text"
+              <select
                 value={slackChannel}
                 onChange={(e) => setSlackChannel(e.target.value)}
-                placeholder="#channel-name"
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2.5 text-sm"
-              />
+              >
+                {SLACK_CHANNELS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* Preview + Actions */}

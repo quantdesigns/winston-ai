@@ -33,6 +33,7 @@ type AgentConfig struct {
 	Workspace    string        `json:"workspace,omitempty"`    // derived from name prefix (team-research → team)
 	ShortName    string        `json:"short_name,omitempty"`   // name without workspace prefix
 	Tools        []string      `json:"tools,omitempty"`        // tools/capabilities this agent uses
+	EntryPoint   bool          `json:"entry_point"`            // true if invokable by humans/schedules; false if helper sub-agent
 	Timeout      time.Duration `json:"-"`
 	SystemPrompt string        `json:"-"` // body of the agent .md file
 }
@@ -46,6 +47,7 @@ type agentConfigJSON struct {
 	Workspace      string   `json:"workspace,omitempty"`
 	ShortName      string   `json:"short_name,omitempty"`
 	Tools          []string `json:"tools,omitempty"`
+	EntryPoint     bool     `json:"entry_point"`
 	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 }
 
@@ -58,6 +60,7 @@ func (a AgentConfig) MarshalJSON() ([]byte, error) {
 		Workspace:      a.Workspace,
 		ShortName:      a.ShortName,
 		Tools:          a.Tools,
+		EntryPoint:     a.EntryPoint,
 		TimeoutSeconds: int(a.Timeout.Seconds()),
 	})
 }
@@ -189,7 +192,7 @@ func parseAgentFile(path string) (*AgentConfig, error) {
 		return nil, fmt.Errorf("malformed frontmatter")
 	}
 
-	cfg := &AgentConfig{}
+	cfg := &AgentConfig{EntryPoint: true} // default: treat untagged agents as entry points
 	for _, line := range strings.Split(parts[0], "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if !ok {
@@ -211,6 +214,13 @@ func parseAgentFile(path string) (*AgentConfig, error) {
 			n, err := strconv.Atoi(strings.TrimSpace(v))
 			if err == nil && n > 0 {
 				cfg.MaxTurns = n
+			}
+		case "entry_point":
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "false", "no", "0":
+				cfg.EntryPoint = false
+			case "true", "yes", "1":
+				cfg.EntryPoint = true
 			}
 		}
 	}
@@ -322,7 +332,7 @@ func (m *Manager) SpawnAgent(agentName, prompt string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("agent %q not found", agentName)
 	}
-	result, err := m.runClaude(context.Background(), agent, prompt, "")
+	result, err := m.runClaude(context.Background(), agent, prompt, "", nil)
 	if err != nil {
 		return "", err
 	}
@@ -339,7 +349,7 @@ func (m *Manager) SpawnAgentInThread(agentName, prompt, channel, threadTS string
 		return "", fmt.Errorf("agent %q not found", agentName)
 	}
 
-	result, err := m.runClaude(context.Background(), agent, prompt, "")
+	result, err := m.runClaude(context.Background(), agent, prompt, "", threadEnv(channel, threadTS))
 	if err != nil {
 		return "", err
 	}
@@ -384,7 +394,7 @@ func (m *Manager) SpawnAgentInThreadStreaming(agentName, prompt, channel, thread
 	}
 	m.mu.Unlock()
 
-	result, err := m.runClaudeStreaming(context.Background(), agent, prompt, "", onUpdate)
+	result, err := m.runClaudeStreaming(context.Background(), agent, prompt, "", threadEnv(channel, threadTS), onUpdate)
 	if err != nil {
 		return "", err
 	}
@@ -417,7 +427,7 @@ func (m *Manager) ContinueThread(threadTS, message string) (string, bool, error)
 
 	log.Printf("[agents] continuing session thread=%s agent=%s claude_session=%s", threadTS, session.AgentID, session.ClaudeSessionID)
 
-	result, err := m.runClaude(context.Background(), agent, message, session.ClaudeSessionID)
+	result, err := m.runClaude(context.Background(), agent, message, session.ClaudeSessionID, threadEnv(session.SlackChannel, threadTS))
 	if err != nil {
 		return "", true, err
 	}
@@ -450,7 +460,7 @@ func (m *Manager) ContinueThreadStreaming(threadTS, message string, onUpdate Str
 
 	log.Printf("[agents] continuing session (streaming) thread=%s agent=%s claude_session=%s", threadTS, session.AgentID, session.ClaudeSessionID)
 
-	result, err := m.runClaudeStreaming(context.Background(), agent, message, session.ClaudeSessionID, onUpdate)
+	result, err := m.runClaudeStreaming(context.Background(), agent, message, session.ClaudeSessionID, threadEnv(session.SlackChannel, threadTS), onUpdate)
 	if err != nil {
 		return "", true, err
 	}
@@ -500,14 +510,31 @@ func buildClaudeArgs(agent *AgentConfig, prompt, resumeID, outputFormat string) 
 }
 
 // newClaudeCmd creates an exec.Cmd for claude with stdin closed and its own process group,
-// so we can kill the entire tree on timeout.
-func newClaudeCmd(ctx context.Context, args []string) *exec.Cmd {
+// so we can kill the entire tree on timeout. extraEnv entries (KEY=VALUE) are appended
+// to the inherited environment.
+func newClaudeCmd(ctx context.Context, args []string, extraEnv []string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = os.Getenv("HOME")
 	// Own process group so we can kill claude + all children on timeout.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = nil
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	return cmd
+}
+
+// threadEnv returns the WINSTON_THREAD_* env vars an agent uses to thread its
+// own Slack posts under the originating message. Returns nil when the agent is
+// not running in a Slack thread context.
+func threadEnv(channel, threadTS string) []string {
+	if threadTS == "" {
+		return nil
+	}
+	return []string{
+		"WINSTON_THREAD_CHANNEL=" + channel,
+		"WINSTON_THREAD_TS=" + threadTS,
+	}
 }
 
 // killProcessGroup sends SIGKILL to the entire process group.
@@ -523,13 +550,13 @@ func killProcessGroup(cmd *exec.Cmd) {
 
 // runClaude executes the claude CLI and returns structured output.
 // If resumeID is non-empty, resumes that session.
-func (m *Manager) runClaude(ctx context.Context, agent *AgentConfig, prompt, resumeID string) (*claudeResult, error) {
+func (m *Manager) runClaude(ctx context.Context, agent *AgentConfig, prompt, resumeID string, extraEnv []string) (*claudeResult, error) {
 	args, _ := buildClaudeArgs(agent, prompt, resumeID, "json")
 
 	ctx, cancel := context.WithTimeout(ctx, agent.Timeout)
 	defer cancel()
 
-	cmd := newClaudeCmd(ctx, args)
+	cmd := newClaudeCmd(ctx, args, extraEnv)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -555,7 +582,7 @@ func (m *Manager) runClaude(ctx context.Context, agent *AgentConfig, prompt, res
 // runClaudeStreaming executes the claude CLI with streaming output, calling onUpdate
 // periodically (at most every 2 seconds) with accumulated output.
 // At the end, it parses the final JSON result just like runClaude.
-func (m *Manager) runClaudeStreaming(ctx context.Context, agent *AgentConfig, prompt, resumeID string, onUpdate StreamCallback) (*claudeResult, error) {
+func (m *Manager) runClaudeStreaming(ctx context.Context, agent *AgentConfig, prompt, resumeID string, extraEnv []string, onUpdate StreamCallback) (*claudeResult, error) {
 	args, _ := buildClaudeArgs(agent, prompt, resumeID, "stream-json")
 	// Insert --verbose after --print for streaming
 	for i, a := range args {
@@ -565,7 +592,7 @@ func (m *Manager) runClaudeStreaming(ctx context.Context, agent *AgentConfig, pr
 		}
 	}
 
-	cmd := newClaudeCmd(ctx, args)
+	cmd := newClaudeCmd(ctx, args, extraEnv)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -767,6 +794,7 @@ func (m *Manager) GetAgent(w http.ResponseWriter, r *http.Request) {
 		"workspace":       agent.Workspace,
 		"short_name":      agent.ShortName,
 		"tools":           agent.Tools,
+		"entry_point":     agent.EntryPoint,
 		"timeout_seconds": int(agent.Timeout.Seconds()),
 		"system_prompt":   agent.SystemPrompt,
 	})

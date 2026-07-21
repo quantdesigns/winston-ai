@@ -13,6 +13,7 @@ interface AgentInfo {
   workspace?: string;
   short_name?: string;
   tools?: string[];
+  entry_point?: boolean;
 }
 
 interface HealthStatus {
@@ -86,6 +87,10 @@ const MODEL_BADGE: Record<string, { label: string; full: string; color: string; 
 
 /* ── helpers ── */
 
+function isEntryPoint(a: AgentInfo): boolean {
+  return a.entry_point !== false; // default true when unset
+}
+
 function buildHierarchy(
   agents: AgentInfo[],
   workspace: string | null
@@ -93,24 +98,33 @@ function buildHierarchy(
   if (workspace === null) {
     const orch = agents.find((a) => a.name === "winston");
     const standalone = agents.filter(
-      (a) => a.name !== "winston" && (!a.workspace || a.workspace === "personal")
+      (a) => a.name !== "winston" && (!a.workspace || a.workspace === "personal") && isEntryPoint(a)
+    );
+    const helpers = agents.filter(
+      (a) => a.name !== "winston" && (!a.workspace || a.workspace === "personal") && !isEntryPoint(a)
     );
     const rows: AgentInfo[][] = [];
     if (orch) rows.push([orch]);
     if (standalone.length) rows.push(standalone);
+    if (helpers.length) rows.push(helpers);
     return rows;
   }
   const wsAgents = agents.filter((a) => a.workspace === workspace);
   const order = ["research", "director", "assets", "deliver"];
-  wsAgents.sort((a, b) => {
+  const sortFn = (a: AgentInfo, b: AgentInfo) => {
     const ai = order.indexOf(a.short_name || "");
     const bi = order.indexOf(b.short_name || "");
     if (ai >= 0 && bi >= 0) return ai - bi;
     if (ai >= 0) return -1;
     if (bi >= 0) return 1;
     return (a.short_name || a.name).localeCompare(b.short_name || b.name);
-  });
-  return wsAgents.map((a) => [a]);
+  };
+  const entry = wsAgents.filter(isEntryPoint).sort(sortFn);
+  const helpers = wsAgents.filter((a) => !isEntryPoint(a)).sort(sortFn);
+  const rows: AgentInfo[][] = [];
+  if (entry.length) rows.push(entry);
+  if (helpers.length) rows.push(helpers);
+  return rows;
 }
 
 /* ── small components ── */
@@ -406,6 +420,16 @@ function AgentCard({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
               Chat
+            </Link>
+            <Link
+              href={`/schedules?agent=${encodeURIComponent(agent.name)}`}
+              className="flex items-center gap-1.5 rounded-xl bg-white/[0.04] px-4 py-2 text-[13px] font-medium text-zinc-400 ring-1 ring-inset ring-white/[0.06] transition-all duration-200 hover:bg-white/[0.07] hover:text-white hover:ring-white/[0.1]"
+              title="Schedule this agent"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Schedule
             </Link>
           </div>
         </div>
@@ -793,7 +817,10 @@ export default function Home() {
 
         {/* agent list */}
         <div className="space-y-3">
-          {tiers.map((tier, tierIdx) => (
+          {tiers.map((tier, tierIdx) => {
+            const isHelperTier =
+              tier.length > 1 && tier.every((a) => a.entry_point === false);
+            return (
             <div key={tierIdx}>
               {activeWorkspace === null && tierIdx === 0 && tier.length === 1 && (
                 <div className="mb-4 flex items-center gap-3">
@@ -811,13 +838,22 @@ export default function Home() {
                   <div className="h-px flex-1 bg-gradient-to-r from-white/[0.04] to-transparent" />
                 </div>
               )}
-              {activeWorkspace !== null && tierIdx > 0 && (
-                <div className="flex justify-center py-2">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.03]">
-                    <svg className="h-4 w-4 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                    </svg>
-                  </div>
+              {activeWorkspace === null && isHelperTier && (
+                <div className="mb-4 mt-8 flex items-center gap-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-zinc-600">
+                    Helpers
+                  </p>
+                  <span className="text-[10px] text-zinc-700">called by other agents</span>
+                  <div className="h-px flex-1 bg-gradient-to-r from-white/[0.04] to-transparent" />
+                </div>
+              )}
+              {activeWorkspace !== null && isHelperTier && (
+                <div className="mb-4 mt-6 flex items-center gap-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-zinc-600">
+                    Helpers
+                  </p>
+                  <span className="text-[10px] text-zinc-700">called by other agents — not scheduled directly</span>
+                  <div className="h-px flex-1 bg-gradient-to-r from-white/[0.04] to-transparent" />
                 </div>
               )}
               <div className="space-y-3">
@@ -831,7 +867,8 @@ export default function Home() {
                 ))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </main>
     </div>
